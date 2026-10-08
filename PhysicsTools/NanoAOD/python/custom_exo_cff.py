@@ -204,17 +204,17 @@ dispJetTable = cms.EDProducer("DispJetTableProducer",
     secondaryVertex = cms.InputTag("displacedInclusiveSecondaryVertices")
 )
 
-muonDeDxTable = cms.EDProducer("MuonDeDxTableProducer",
+muonTrackDeDxTable = cms.EDProducer("MuonTrackDeDxTableProducer",
     name           = cms.string("Muon"),
     muons          = cms.InputTag("linkedObjects", "muons"),
     isolatedTracks = cms.InputTag("isolatedTracks"),
     dedx           = cms.InputTag("isolatedTracks"),
 )
 
-def add_muonDeDxTables(process):
-    process.muonDeDxTable = muonDeDxTable
-    process.muonDeDxTask  = cms.Task(process.muonDeDxTable)
-    process.nanoTableTaskCommon.add(process.muonDeDxTask)
+def add_muonTrackDeDxTables(process):
+    process.muonTrackDeDxTable = muonTrackDeDxTable
+    process.muonTrackDeDxTask  = cms.Task(process.muonTrackDeDxTable)
+    process.nanoTableTaskCommon.add(process.muonTrackDeDxTask)
     return process
 
 def add_dispJetTables(process):
@@ -321,7 +321,7 @@ def add_exonanoTables(process):
     process = add_dsamuonTables(process)
     process = add_electronVertexTables(process)
     process = add_dispJetTables(process)
-    process = add_muonDeDxTables(process)
+    process = add_muonTrackDeDxTables(process)
 
     isMC = hasattr(process, "nanoSequenceMC") and process.schedule.contains(process.nanoSequenceMC)
 

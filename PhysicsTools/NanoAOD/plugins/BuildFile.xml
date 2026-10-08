@@ -19,7 +19,9 @@
 <use name="DataFormats/PatCandidates"/>
 <use name="DataFormats/ProtonReco"/>
 <use name="DataFormats/Provenance"/>
+<use name="DataFormats/SiPixelCluster"/>
 <use name="DataFormats/SiPixelDetId"/>
+<use name="DataFormats/SiStripCluster"/>
 <use name="DataFormats/SiStripDetId"/>
 <use name="DataFormats/TrackReco"/>
 <use name="DataFormats/TrackerCommon"/>

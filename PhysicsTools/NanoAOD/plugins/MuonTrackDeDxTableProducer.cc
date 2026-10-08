@@ -11,6 +11,7 @@
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
+#include "FWCore/Utilities/interface/Exception.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 #include "FWCore/ParameterSet/interface/ConfigurationDescriptions.h"
 #include "FWCore/ParameterSet/interface/ParameterSetDescription.h"
@@ -106,7 +107,7 @@ namespace {
           (localX > 0 && (localY - 12.51f * localX + 44.9f) < 0))
         found = true;
     } else {
-      edm::LogWarning("MuonDeDxTableProducer") << "No ring found for TID, check for error";
+      edm::LogWarning("MuonTrackDeDxTableProducer") << "No ring found for TID, check for error";
     }
     return found;
   }
@@ -165,7 +166,7 @@ namespace {
           (localX > 0 && (localY - 24.88f * localX - 98.68f) < 0))
         found = true;
     } else {
-      edm::LogWarning("MuonDeDxTableProducer") << "No ring found for TEC, check for error";
+      edm::LogWarning("MuonTrackDeDxTableProducer") << "No ring found for TEC, check for error";
     }
     return found;
   }
@@ -187,7 +188,7 @@ namespace {
       case SiStripDetId::TEC:
         return isNearEdgeTEC(tTopo.tecRing(detId), localX, localY);
       default:
-        edm::LogWarning("MuonDeDxTableProducer") << "No subdetector found in isHitNearEdge, check for error";
+        edm::LogWarning("MuonTrackDeDxTableProducer") << "No subdetector found in isHitNearEdge, check for error";
         return false;
     }
   }
@@ -233,10 +234,10 @@ namespace {
   }
 }  // namespace
 
-class MuonDeDxTableProducer : public edm::global::EDProducer<> {
+class MuonTrackDeDxTableProducer : public edm::global::EDProducer<> {
 public:
-  explicit MuonDeDxTableProducer(const edm::ParameterSet&);
-  ~MuonDeDxTableProducer() override = default;
+  explicit MuonTrackDeDxTableProducer(const edm::ParameterSet&);
+  ~MuonTrackDeDxTableProducer() override = default;
   static void fillDescriptions(edm::ConfigurationDescriptions&);
 
 private:
@@ -249,17 +250,19 @@ private:
   const edm::ESGetToken<TrackerTopology, TrackerTopologyRcd> trackerTopoToken_;
 };
 
-MuonDeDxTableProducer::MuonDeDxTableProducer(const edm::ParameterSet& iConfig)
+MuonTrackDeDxTableProducer::MuonTrackDeDxTableProducer(const edm::ParameterSet& iConfig)
     : name_(iConfig.getParameter<std::string>("name")),
       muonsToken_(consumes<std::vector<pat::Muon>>(iConfig.getParameter<edm::InputTag>("muons"))),
       isoTracksToken_(consumes<std::vector<pat::IsolatedTrack>>(iConfig.getParameter<edm::InputTag>("isolatedTracks"))),
       dedxToken_(consumes<reco::DeDxHitInfoAss>(iConfig.getParameter<edm::InputTag>("dedx"))),
       trackerTopoToken_(esConsumes()) {
   produces<nanoaod::FlatTable>(name_);
-  produces<nanoaod::FlatTable>(name_ + "DeDxHits");
+  produces<nanoaod::FlatTable>(name_ + "TrackDeDxHits");
+  produces<nanoaod::FlatTable>(name_ + "TrackDeDxStrip");
+  produces<nanoaod::FlatTable>(name_ + "TrackDeDxPixel");
 }
 
-void MuonDeDxTableProducer::produce(edm::StreamID, edm::Event& iEvent, const edm::EventSetup& iSetup) const {
+void MuonTrackDeDxTableProducer::produce(edm::StreamID, edm::Event& iEvent, const edm::EventSetup& iSetup) const {
   edm::Handle<std::vector<pat::Muon>> muonsH;
   iEvent.getByToken(muonsToken_, muonsH);
   edm::Handle<std::vector<pat::IsolatedTrack>> isoTracksH;
@@ -294,9 +297,12 @@ void MuonDeDxTableProducer::produce(edm::StreamID, edm::Event& iEvent, const edm
   std::vector<uint8_t> hitLayer;
   std::vector<uint32_t> hitDetId;
   std::vector<bool> hitIsNearEdge;
+  std::vector<int32_t> stripHitIdx, pixelHitIdx;
+  std::vector<uint16_t> stripNumber, pixelRow, pixelColumn, pixelCharge;
+  std::vector<uint8_t> stripAmplitude;
 
-  // The "good muon" selection (fillHits) gates only which muons contribute rows to the MuonDeDxHits per-hit
-  // table; nDeDxHits, nPixelDeDxHits and hasTrackerHitNearEdge below are filled for every muon with a matched
+  // The "good muon" selection (fillHits) gates only which muons contribute rows to the MuonTrackDeDxHits per-hit
+  // table; nDeDxHits, nPixelDeDxHits and trackHasHitNearEdge below are filled for every muon with a matched
   // isolatedTracks/DeDxHitInfo entry, independent of the selection.
   for (size_t i = 0; i < nMuons; ++i) {
     const pat::Muon& mu = (*muonsH)[i];
@@ -343,6 +349,35 @@ void MuonDeDxTableProducer::produce(edm::StreamID, edm::Event& iEvent, const edm
         nearEdge = true;
 
       if (fillHits) {
+        if (hitDEdx.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
+          throw cms::Exception("MuonTrackDeDxIndexOverflow") << "Hit index exceeds int32 range";
+        const auto hitIdx = static_cast<int32_t>(hitDEdx.size());
+        if (isPixel(subdet)) {
+          const auto* cluster = dedx.pixelCluster(h);
+          if (cluster == nullptr)
+            throw cms::Exception("MissingMuonTrackDeDxCluster")
+                << "Missing pixel cluster for muon " << i << ", source hit " << h << ", DetId " << dedxId.rawId();
+          for (int channel = 0; channel < cluster->size(); ++channel) {
+            const auto pixel = cluster->pixel(channel);
+            pixelHitIdx.push_back(hitIdx);
+            pixelRow.push_back(pixel.x);
+            pixelColumn.push_back(pixel.y);
+            pixelCharge.push_back(pixel.adc);
+          }
+        } else {
+          const auto* cluster = dedx.stripCluster(h);
+          if (cluster == nullptr)
+            throw cms::Exception("MissingMuonTrackDeDxCluster")
+                << "Missing strip cluster for muon " << i << ", source hit " << h << ", DetId " << dedxId.rawId();
+          for (size_t channel = 0; channel < cluster->amplitudes().size(); ++channel) {
+            const size_t strip = cluster->firstStrip() + channel;
+            if (strip > std::numeric_limits<uint16_t>::max())
+              throw cms::Exception("MuonTrackDeDxIndexOverflow") << "Strip index exceeds uint16 range";
+            stripHitIdx.push_back(hitIdx);
+            stripNumber.push_back(static_cast<uint16_t>(strip));
+            stripAmplitude.push_back(cluster->amplitudes()[channel]);
+          }
+        }
         float charge;
         if (isPixel(subdet)) {
           charge = kMeVPerElectronHolePair * dedx.charge(h);
@@ -396,17 +431,17 @@ void MuonDeDxTableProducer::produce(edm::StreamID, edm::Event& iEvent, const edm
   // Build and put Muon extension table
   auto muTab = std::make_unique<nanoaod::FlatTable>(nMuons, name_, false, /*extension=*/true);
   muTab->addColumn<uint8_t>(
-      "nDeDxHits",
+      "trackNDeDxHits",
       nDeDxHits,
       "number of dE/dx hits on the matched track; 0 if the muon has no matching isolatedTracks entry or no "
       "DeDxHitInfo");
-  muTab->addColumn<uint8_t>("nPixelDeDxHits", nPixelDeDxHits, "number of pixel dE/dx hits");
+  muTab->addColumn<uint8_t>("trackNPixelDeDxHits", nPixelDeDxHits, "number of pixel dE/dx hits");
   muTab->addColumn<bool>(
-      "hasTrackerHitNearEdge", hasNearEdge, "any dE/dx hit near a sensor edge; false when nDeDxHits == 0");
+      "trackHasHitNearEdge", hasNearEdge, "any dE/dx hit near a sensor edge; false when trackNDeDxHits == 0");
 
   // Build and put per-hit table
   const size_t nHitsTotal = hitDEdx.size();
-  auto hitTab = std::make_unique<nanoaod::FlatTable>(nHitsTotal, name_ + "DeDxHits", false, false);
+  auto hitTab = std::make_unique<nanoaod::FlatTable>(nHitsTotal, name_ + "TrackDeDxHits", false, false);
   hitTab->addColumn<int16_t>("muonIdx", hitMuonIdx, "index into the Muon collection");
   hitTab->addColumn<float>("dEdx", hitDEdx, "charge/pathlength [MeV/cm]", /*mantissaBits=*/12);
   hitTab->addColumn<float>("pathLength",
@@ -422,11 +457,24 @@ void MuonDeDxTableProducer::produce(edm::StreamID, edm::Event& iEvent, const edm
                           "hit is within the sensor-edge fiducial region (EXO-19-006), i.e. its dE/dx measurement "
                           "is not reliable");
 
+  auto stripTab = std::make_unique<nanoaod::FlatTable>(stripHitIdx.size(), name_ + "TrackDeDxStrip", false, false);
+  stripTab->addColumn<int32_t>("hitIdx", stripHitIdx, "event-local row in MuonTrackDeDxHits");
+  stripTab->addColumn<uint16_t>("strip", stripNumber, "sensor strip index: cluster firstStrip plus amplitude index");
+  stripTab->addColumn<uint8_t>(
+      "amplitude", stripAmplitude, "stored strip ADC code, including zero; 254 and 255 are overflow codes");
+  auto pixelTab = std::make_unique<nanoaod::FlatTable>(pixelHitIdx.size(), name_ + "TrackDeDxPixel", false, false);
+  pixelTab->addColumn<int32_t>("hitIdx", pixelHitIdx, "event-local row in MuonTrackDeDxHits");
+  pixelTab->addColumn<uint16_t>("row", pixelRow, "pixel sensor row");
+  pixelTab->addColumn<uint16_t>("column", pixelColumn, "pixel sensor column");
+  pixelTab->addColumn<uint16_t>("charge", pixelCharge, "stored calibrated pixel charge [electrons], not raw ADC");
+
+  iEvent.put(std::move(stripTab), name_ + "TrackDeDxStrip");
+  iEvent.put(std::move(pixelTab), name_ + "TrackDeDxPixel");
   iEvent.put(std::move(muTab), name_);
-  iEvent.put(std::move(hitTab), name_ + "DeDxHits");
+  iEvent.put(std::move(hitTab), name_ + "TrackDeDxHits");
 }
 
-void MuonDeDxTableProducer::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
+void MuonTrackDeDxTableProducer::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   edm::ParameterSetDescription desc;
   desc.add<std::string>("name", "Muon")
       ->setComment("name of the Muon FlatTable being extended (also prefixes the hit table)");
@@ -436,7 +484,7 @@ void MuonDeDxTableProducer::fillDescriptions(edm::ConfigurationDescriptions& des
       ->setComment("full (uncleaned) isolated track collection used for packedCandidate identity matching");
   desc.add<edm::InputTag>("dedx", edm::InputTag("isolatedTracks"))
       ->setComment("DeDxHitInfo association product (same label as isolatedTracks)");
-  descriptions.add("muonDeDxTable", desc);
+  descriptions.add("muonTrackDeDxTable", desc);
 }
 
-DEFINE_FWK_MODULE(MuonDeDxTableProducer);
+DEFINE_FWK_MODULE(MuonTrackDeDxTableProducer);
